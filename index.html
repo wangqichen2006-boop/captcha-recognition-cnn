@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>CAPTCHA Recognition</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --border: #2a3038;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #4ade80;
+    --accent-dim: #16311f;
+    --danger: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+  }
+  .card {
+    width: 100%;
+    max-width: 560px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 32px;
+  }
+  h1 {
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 4px;
+    font-weight: 600;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 0 28px;
+  }
+  .captcha-frame {
+    background: #000;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 90px;
+    margin-bottom: 20px;
+  }
+  .captcha-frame img {
+    image-rendering: pixelated;
+    width: 320px;
+    max-width: 100%;
+  }
+  .placeholder {
+    color: var(--muted);
+    font-size: 13px;
+  }
+  button {
+    width: 100%;
+    background: var(--accent);
+    color: #04140a;
+    border: none;
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    font-family: inherit;
+    transition: opacity 0.15s ease;
+  }
+  button:hover { opacity: 0.88; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .result {
+    margin-top: 24px;
+    display: none;
+  }
+  .result.visible { display: block; }
+
+  .verdict {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-radius: 6px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+  }
+  .verdict.correct { border-color: #2a5a3d; background: var(--accent-dim); }
+  .verdict.wrong { border-color: #5a2a2a; background: #2a1616; }
+
+  .verdict .predicted {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+  }
+  .verdict .status {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .verdict.correct .status { color: var(--accent); }
+  .verdict.wrong .status { color: var(--danger); }
+
+  .truth {
+    font-size: 12px;
+    color: var(--muted);
+    margin: -8px 0 16px;
+  }
+  .truth span { color: var(--text); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-weight: 600;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .char-cell {
+    font-size: 16px;
+    font-weight: 700;
+    width: 60px;
+  }
+  .conf-bar-track {
+    background: #21262d;
+    border-radius: 4px;
+    height: 6px;
+    width: 100%;
+    overflow: hidden;
+  }
+  .conf-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+    background: var(--accent);
+  }
+  .conf-value {
+    width: 56px;
+    text-align: right;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+  <div class="card">
+    <h1>CAPTCHA Recognition</h1>
+    <p class="subtitle">Generate a fresh CAPTCHA and let your trained model read it</p>
+
+    <div class="captcha-frame" id="captchaFrame">
+      <span class="placeholder">Click the button below to generate a CAPTCHA</span>
+    </div>
+
+    <button id="generateBtn">Generate &amp; Recognize</button>
+
+    <div class="result" id="result">
+      <div class="verdict" id="verdict">
+        <span class="predicted" id="predictedText">-----</span>
+        <span class="status" id="statusText">-</span>
+      </div>
+      <p class="truth" id="truthLine"></p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Predicted</th>
+            <th>Confidence</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="charTableBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+<script>
+const generateBtn = document.getElementById("generateBtn");
+const captchaFrame = document.getElementById("captchaFrame");
+const resultBox = document.getElementById("result");
+const verdictBox = document.getElementById("verdict");
+const predictedText = document.getElementById("predictedText");
+const statusText = document.getElementById("statusText");
+const truthLine = document.getElementById("truthLine");
+const charTableBody = document.getElementById("charTableBody");
+
+generateBtn.addEventListener("click", async () => {
+  generateBtn.disabled = true;
+  generateBtn.textContent = "Recognizing...";
+
+  try {
+    const response = await fetch("/api/generate", { method: "POST" });
+    if (!response.ok) throw new Error("Server error: " + response.status);
+    const data = await response.json();
+    renderResult(data);
+  } catch (err) {
+    captchaFrame.innerHTML = `<span class="placeholder">Error: ${err.message}</span>`;
+  } finally {
+    generateBtn.disabled = false;
+    generateBtn.textContent = "Generate &amp; Recognize";
+  }
+});
+
+function renderResult(data) {
+  // Show the generated CAPTCHA image
+  captchaFrame.innerHTML = `<img src="data:image/png;base64,${data.image_base64}" alt="captcha">`;
+
+  // Verdict banner
+  verdictBox.classList.remove("correct", "wrong");
+  verdictBox.classList.add(data.correct ? "correct" : "wrong");
+  predictedText.textContent = data.predicted;
+  statusText.textContent = data.correct ? "All Correct" : "Mismatch";
+
+  truthLine.innerHTML = `True label: <span>${data.true_label}</span>`;
+
+  // Per-character confidence table
+  charTableBody.innerHTML = "";
+  data.characters.forEach((item, index) => {
+    const truthChar = data.true_label[index] || "?";
+    const isRight = item.char === truthChar;
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${index + 1}</td>
+      <td class="char-cell" style="color:${isRight ? "#4ade80" : "#f87171"}">${item.char}</td>
+      <td>
+        <div class="conf-bar-track">
+          <div class="conf-bar-fill" style="width:${item.confidence}%; background:${isRight ? "#4ade80" : "#f87171"}"></div>
+        </div>
+      </td>
+      <td class="conf-value">${item.confidence.toFixed(1)}%</td>
+    `;
+    charTableBody.appendChild(row);
+  });
+
+  resultBox.classList.add("visible");
+}
+</script>
+
+</body>
+</html>
