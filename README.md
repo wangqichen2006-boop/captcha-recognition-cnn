@@ -32,7 +32,7 @@ sudo apt install fonts-dejavu-core fonts-liberation fonts-freefont-ttf fonts-not
 ```
 .
 ├── generate_new_charac.py     # Generates single-character training images (data/)
-├── train_captcha_cnn.py       # Trains the RECOGNITION model (captcha_cnn.pth)
+├── train_digits.py            # Trains the RECOGNITION model (captcha_cnn.pth)
 ├── predict_single_char.py     # Test the recognition model on one character image
 │
 ├── generate_full_captcha.py   # Generates full 5-character CAPTCHA images + ground-truth
@@ -40,15 +40,15 @@ sudo apt install fonts-dejavu-core fonts-liberation fonts-freefont-ttf fonts-not
 ├── train_localization.py      # Trains the LOCALIZATION model (localization_cnn.pth)
 │
 ├── predict_pipeline.py        # Full pipeline: localize -> crop -> recognize
-├── run_multiple_times.py      # Runs a training script N times in a row
+├── run_manytimes.py           # Runs a training script N times in a row
 │
 ├── app.py                     # Flask backend for the web demo
-├── index.html                 # Web demo frontend
+├── index.html                 # Web demo frontend (served by app.py)
 │
 └── README.md
 ```
 
-> Both training scripts are self-contained: each run deletes old generated images, generates a fresh 10,000-image batch, loads the previous model checkpoint if one exists, trains a few epochs, saves the checkpoint, and appends the run's accuracy to a CSV log + chart.
+> The two training scripts (`train_digits.py`, `train_localization.py`) are self-contained: each run deletes old generated images, generates a fresh 10,000-image batch, loads the previous model checkpoint if one exists, trains a few epochs, saves the checkpoint, and appends the run's accuracy to a CSV log + chart.
 
 ## Setup
 
@@ -59,68 +59,79 @@ sudo apt install fonts-dejavu-core fonts-liberation fonts-freefont-ttf fonts-not
    python3 -c "import torch; print(torch.cuda.is_available())"
    ```
 
-## Usage
+## Script-by-script usage
 
-### 1. Train the recognition model
-
+### `generate_new_charac.py`
+Generates 10,000 single-character images (62 classes: `0-9`, `A-Z`, `a-z`) into `data/`, one subfolder per class. Applies randomized distortions (rotation, shear, perspective, pixelation, grid lines, noise lines, blur) for visual variety. You normally don't run this directly — `train_digits.py` calls it automatically before every training run. Can be run standalone to preview generated data:
 ```bash
-python3 train_captcha_cnn.py
+python3 generate_new_charac.py
 ```
 
+### `train_digits.py`
+Trains the **recognition** model — classifies a single cropped character image into one of 62 classes.
+```bash
+python3 train_digits.py
+```
 Produces/updates:
-- `captcha_cnn.pth` — the model checkpoint (cumulative across runs)
+- `captcha_cnn.pth` — model checkpoint (cumulative across runs — each run resumes from the last)
 - `accuracy_history.csv` / `accuracy_history.png` — accuracy log and chart
 
-Run it repeatedly (or use the batch runner below) to keep improving accuracy:
-
-```bash
-python3 run_multiple_times.py 20
-```
-
-Test it on a single character image:
-
+### `predict_single_char.py`
+Loads `captcha_cnn.pth` and runs it on a single character image, printing the top-5 predicted characters with confidence.
 ```bash
 python3 predict_single_char.py path/to/character.png
 ```
 
-### 2. Train the localization model
+### `generate_full_captcha.py`
+Generates 10,000 full 5-character CAPTCHA images into `data_full/`, plus a `boxes.json` file recording the ground-truth bounding box of each character (used to train the localization model). You normally don't run this directly — `train_localization.py` calls it automatically before every training run. Can be run standalone to preview generated data:
+```bash
+python3 generate_full_captcha.py
+```
 
+### `train_localization.py`
+Trains the **localization** model — given a full CAPTCHA image, predicts the bounding box (left, top, right, bottom) of each of the 5 characters. This is a regression task (predicting coordinates), evaluated using IoU (Intersection over Union) against the ground-truth boxes.
 ```bash
 python3 train_localization.py
 ```
-
 Produces/updates:
-- `localization_cnn.pth` — the model checkpoint (cumulative across runs)
+- `localization_cnn.pth` — model checkpoint (cumulative across runs)
 - `accuracy_history_localization.csv` / `accuracy_history_localization.png`
 
-### 3. Run the full pipeline on a CAPTCHA image
+### `run_manytimes.py`
+Convenience script that runs `train_digits.py` back-to-back N times, so you don't have to manually re-run the command yourself. Stops early if any run fails.
+```bash
+python3 run_manytimes.py 20
+```
+If no number is given, defaults to 5 runs. To use it with `train_localization.py` instead, edit the `TRAIN_SCRIPT` variable at the top of the file.
 
-Requires both `captcha_cnn.pth` and `localization_cnn.pth` to exist.
-
+### `predict_pipeline.py`
+The full end-to-end pipeline. Requires both `captcha_cnn.pth` and `localization_cnn.pth` to exist. Given a full CAPTCHA image:
+1. Runs the localization model to find the 5 character bounding boxes.
+2. Crops each region.
+3. Runs the recognition model on each crop.
+4. Combines the 5 results into the final predicted string.
 ```bash
 python3 predict_pipeline.py path/to/captcha.png
 ```
+Prints the predicted boxes, the recognized character + confidence at each position, and the final combined string. Also saves each cropped character to `debug_crops/` so you can visually confirm the localization model cropped the right regions.
 
-Outputs the predicted bounding boxes, the recognized character + confidence at each position, and the final combined string. Debug crops of each detected character are saved to `debug_crops/` for visual inspection.
-
-### 4. Run the web demo
-
+### `app.py` + `index.html`
+A Flask web demo. On startup, loads both trained models once. Serves `index.html` at `/`, and exposes a `POST /api/generate` endpoint that generates a brand-new random CAPTCHA, runs the full pipeline on it, and returns the image + prediction + per-character confidence as JSON. `index.html` is the frontend — a page with a button that calls this endpoint and renders the result, including a green/red correctness indicator and a confidence bar per character.
 ```bash
 python3 app.py
 ```
-
-Then open `http://localhost:5000` in a browser. Click the button to generate a new CAPTCHA and see both models run on it live, with per-character confidence.
+Then open `http://localhost:5000` in a browser.
 
 ## How cumulative training works
 
-Every training script follows the same pattern:
+Both `train_digits.py` and `train_localization.py` follow the same pattern:
 
 1. Delete the old generated dataset and generate a fresh batch of images.
 2. If a checkpoint file exists, load the saved model + optimizer state and resume from there; otherwise start from scratch.
 3. Train for a fixed number of epochs.
 4. Save the updated checkpoint (overwriting the old one) and append this run's accuracy to a history log.
 
-This means you can safely re-run a training script any number of times — each run builds on the last, and the accuracy charts show progress across all runs, not just the most recent one.
+This means you can safely re-run either training script any number of times — each run builds on the last, and the accuracy charts show progress across all runs, not just the most recent one.
 
 ## Notes
 
